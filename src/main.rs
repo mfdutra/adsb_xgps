@@ -15,6 +15,10 @@ struct Args {
 
     /// Flight callsign to track
     callsign: String,
+
+    /// Print all tracked aircraft every second
+    #[arg(long)]
+    debug: bool,
 }
 
 struct Aircraft {
@@ -187,24 +191,50 @@ async fn xgps_broadcaster(callsign: String, aircraft_map: AircraftMap) {
     }
 }
 
+async fn debug_printer(aircraft_map: AircraftMap) {
+    let mut interval = time::interval(Duration::from_secs(1));
+
+    loop {
+        interval.tick().await;
+
+        let map = aircraft_map.read().await;
+        if map.is_empty() {
+            continue;
+        }
+
+        println!("--- Aircraft ({}) ---", map.len());
+        for (hex, a) in map.iter() {
+            let cs = a.callsign.as_deref().unwrap_or("-");
+            let lat = a.latitude.map_or("-".to_string(), |v| format!("{v:.5}"));
+            let lon = a.longitude.map_or("-".to_string(), |v| format!("{v:.5}"));
+            let alt = a.altitude_ft.map_or("-".to_string(), |v| format!("{v:.0}ft"));
+            let gs = a.ground_speed_kt.map_or("-".to_string(), |v| format!("{v:.0}kt"));
+            let trk = a.track.map_or("-".to_string(), |v| format!("{v:.0}°"));
+            let age = a.last_updated.elapsed().as_secs();
+            println!("  {hex} {cs:>8}  {lat:>10} {lon:>11}  {alt:>7} {gs:>5} {trk:>4}  {age}s ago");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
     let aircraft_map: AircraftMap = Arc::new(RwLock::new(HashMap::new()));
 
     let reader_handle = tokio::spawn(sbs_reader(args.server, aircraft_map.clone()));
-    let broadcaster_handle = tokio::spawn(xgps_broadcaster(args.callsign, aircraft_map));
+    let broadcaster_handle = tokio::spawn(xgps_broadcaster(args.callsign, aircraft_map.clone()));
 
-    tokio::select! {
-        r = reader_handle => {
-            if let Err(e) = r {
-                eprintln!("SBS reader task failed: {}", e);
-            }
+    if args.debug {
+        let debug_handle = tokio::spawn(debug_printer(aircraft_map));
+        tokio::select! {
+            r = reader_handle => { if let Err(e) = r { eprintln!("SBS reader task failed: {}", e); } }
+            r = broadcaster_handle => { if let Err(e) = r { eprintln!("XGPS broadcaster task failed: {}", e); } }
+            r = debug_handle => { if let Err(e) = r { eprintln!("Debug printer task failed: {}", e); } }
         }
-        r = broadcaster_handle => {
-            if let Err(e) = r {
-                eprintln!("XGPS broadcaster task failed: {}", e);
-            }
+    } else {
+        tokio::select! {
+            r = reader_handle => { if let Err(e) = r { eprintln!("SBS reader task failed: {}", e); } }
+            r = broadcaster_handle => { if let Err(e) = r { eprintln!("XGPS broadcaster task failed: {}", e); } }
         }
     }
 }
