@@ -1,3 +1,5 @@
+mod web;
+
 use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,17 +23,18 @@ struct Args {
     debug: bool,
 }
 
-struct Aircraft {
-    callsign: Option<String>,
-    latitude: Option<f64>,
-    longitude: Option<f64>,
-    altitude_ft: Option<f64>,
-    ground_speed_kt: Option<f64>,
-    track: Option<f64>,
-    last_updated: Instant,
+pub struct Aircraft {
+    pub callsign: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub altitude_ft: Option<f64>,
+    pub ground_speed_kt: Option<f64>,
+    pub track: Option<f64>,
+    pub last_updated: Instant,
 }
 
-type AircraftMap = Arc<RwLock<HashMap<String, Aircraft>>>;
+pub type AircraftMap = Arc<RwLock<HashMap<String, Aircraft>>>;
+pub type TrackedCallsign = Arc<RwLock<String>>;
 
 fn parse_sbs_line(line: &str, aircraft_map: &mut HashMap<String, Aircraft>) {
     let fields: Vec<&str> = line.split(',').collect();
@@ -138,7 +141,7 @@ async fn sbs_reader(server: String, aircraft_map: AircraftMap) {
     eprintln!("Connection to {} closed", addr);
 }
 
-async fn xgps_broadcaster(callsign: String, aircraft_map: AircraftMap) {
+async fn xgps_broadcaster(callsign: TrackedCallsign, aircraft_map: AircraftMap) {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .expect("Failed to bind UDP socket");
@@ -151,6 +154,7 @@ async fn xgps_broadcaster(callsign: String, aircraft_map: AircraftMap) {
     loop {
         interval.tick().await;
 
+        let callsign = callsign.read().await.clone();
         let map = aircraft_map.read().await;
         let found = map.values().find(|a| {
             a.callsign
@@ -224,9 +228,12 @@ async fn debug_printer(aircraft_map: AircraftMap) {
 async fn main() {
     let args = Args::parse();
     let aircraft_map: AircraftMap = Arc::new(RwLock::new(HashMap::new()));
+    let tracked_callsign: TrackedCallsign = Arc::new(RwLock::new(args.callsign));
 
     let reader_handle = tokio::spawn(sbs_reader(args.server, aircraft_map.clone()));
-    let broadcaster_handle = tokio::spawn(xgps_broadcaster(args.callsign, aircraft_map.clone()));
+    let broadcaster_handle =
+        tokio::spawn(xgps_broadcaster(tracked_callsign.clone(), aircraft_map.clone()));
+    let web_handle = tokio::spawn(web::run(aircraft_map.clone(), tracked_callsign.clone()));
 
     #[allow(clippy::collapsible_if)]
     if args.debug {
@@ -235,11 +242,13 @@ async fn main() {
             r = reader_handle => { if let Err(e) = r { eprintln!("SBS reader task failed: {}", e); } }
             r = broadcaster_handle => { if let Err(e) = r { eprintln!("XGPS broadcaster task failed: {}", e); } }
             r = debug_handle => { if let Err(e) = r { eprintln!("Debug printer task failed: {}", e); } }
+            r = web_handle => { if let Err(e) = r { eprintln!("Web server task failed: {}", e); } }
         }
     } else {
         tokio::select! {
             r = reader_handle => { if let Err(e) = r { eprintln!("SBS reader task failed: {}", e); } }
             r = broadcaster_handle => { if let Err(e) = r { eprintln!("XGPS broadcaster task failed: {}", e); } }
+            r = web_handle => { if let Err(e) = r { eprintln!("Web server task failed: {}", e); } }
         }
     }
 }
