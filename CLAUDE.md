@@ -21,7 +21,7 @@ cargo clippy                 # Lint (code uses clippy pragmas)
 Two-file application (~900 lines total) with four concurrent Tokio async tasks coordinated via `tokio::select!`:
 
 - **`src/main.rs`** (~600 lines) — CLI args, `Aircraft` struct, SBS parsing, XGPS broadcasting, debug printing, and all unit tests
-- **`src/web.rs`** (~300 lines) — Minimal hand-rolled HTTP server (no framework) serving an HTML dashboard and JSON API
+- **`src/web.rs`** (~200 lines) — Axum-based HTTP server serving an HTML dashboard and JSON API
 
 ### Async Tasks
 
@@ -43,4 +43,4 @@ Two-file application (~900 lines total) with four concurrent Tokio async tasks c
 
 ## Dependencies
 
-Only two dependencies: `clap` v4 (derive) for CLI args, `tokio` v1 (full) for async runtime. The web server is implemented directly on `tokio::net::TcpListener` with no HTTP framework.
+Four dependencies: `axum` v0.8 for the web server, `clap` v4 (derive) for CLI args, `serde` v1 (derive) for JSON serialization, and `tokio` v1 (full) for the async runtime.

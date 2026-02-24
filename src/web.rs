@@ -1,142 +1,107 @@
 use crate::{AircraftMap, TrackedCallsign};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
+use axum::extract::State;
+use axum::response::{Html, Json, Redirect};
+use axum::routing::{get, post};
+use axum::{Form, Router};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+struct AppState {
+    aircraft_map: AircraftMap,
+    tracked_callsign: TrackedCallsign,
+}
+
+#[derive(Deserialize)]
+struct TrackForm {
+    callsign: String,
+}
+
+#[derive(Serialize)]
+struct DataResponse {
+    tracked: String,
+    aircraft: Vec<AircraftEntry>,
+}
+
+#[derive(Serialize)]
+struct AircraftEntry {
+    hex: String,
+    callsign: String,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    alt_ft: Option<f64>,
+    gs_kt: Option<f64>,
+    track: Option<f64>,
+    age: u64,
+    tracking: bool,
+}
 
 pub async fn run(aircraft_map: AircraftMap, tracked_callsign: TrackedCallsign) {
-    let listener = TcpListener::bind("0.0.0.0:8081")
+    let state = Arc::new(AppState {
+        aircraft_map,
+        tracked_callsign,
+    });
+
+    let app = Router::new()
+        .route("/", get(get_index))
+        .route("/data", get(get_data))
+        .route("/track", post(post_track))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8081")
         .await
         .expect("Failed to bind web server on port 8081");
     println!("Web server listening on http://0.0.0.0:8081");
 
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                eprintln!("Web server accept error: {}", e);
-                continue;
-            }
-        };
-
-        let map = aircraft_map.clone();
-        let callsign = tracked_callsign.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, map, callsign).await {
-                eprintln!("Web server connection error: {}", e);
-            }
-        });
-    }
+    axum::serve(listener, app)
+        .await
+        .expect("Web server failed");
 }
 
-async fn handle_connection(
-    stream: tokio::net::TcpStream,
-    aircraft_map: AircraftMap,
-    tracked_callsign: TrackedCallsign,
-) -> std::io::Result<()> {
-    let (reader, mut writer) = stream.into_split();
-    let mut buf_reader = BufReader::new(reader);
-
-    let mut request_line = String::new();
-    buf_reader.read_line(&mut request_line).await?;
-
-    // Read remaining headers (and body content-length if present)
-    let mut content_length: usize = 0;
-    let mut header_line = String::new();
-    loop {
-        header_line.clear();
-        buf_reader.read_line(&mut header_line).await?;
-        if header_line.trim().is_empty() {
-            break;
-        }
-        if let Some(val) = header_line.strip_prefix("Content-Length: ") {
-            content_length = val.trim().parse().unwrap_or(0);
-        }
-    }
-
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Ok(());
-    }
-
-    let method = parts[0];
-    let path = parts[1];
-
-    match (method, path) {
-        ("GET", "/") => {
-            let body = build_page(&aircraft_map, &tracked_callsign).await;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            writer.write_all(response.as_bytes()).await?;
-        }
-        ("GET", "/data") => {
-            let body = build_json(&aircraft_map, &tracked_callsign).await;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            writer.write_all(response.as_bytes()).await?;
-        }
-        ("POST", "/track") => {
-            let mut body_buf = vec![0u8; content_length];
-            if content_length > 0 {
-                tokio::io::AsyncReadExt::read_exact(&mut buf_reader, &mut body_buf).await?;
-            }
-            let body_str = String::from_utf8_lossy(&body_buf);
-
-            // Parse "callsign=VALUE" from form body
-            let new_callsign = body_str
-                .split('&')
-                .find_map(|pair| pair.strip_prefix("callsign="))
-                .unwrap_or("")
-                .trim();
-
-            if !new_callsign.is_empty() {
-                let decoded = url_decode(new_callsign);
-                *tracked_callsign.write().await = decoded.clone();
-                println!("Web: now tracking callsign '{}'", decoded);
-            }
-
-            // Redirect back to /
-            let response = "HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            writer.write_all(response.as_bytes()).await?;
-        }
-        _ => {
-            let response =
-                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            writer.write_all(response.as_bytes()).await?;
-        }
-    }
-
-    Ok(())
+async fn get_index(State(state): State<Arc<AppState>>) -> Html<String> {
+    Html(build_page(&state.aircraft_map, &state.tracked_callsign).await)
 }
 
-fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.bytes();
-    while let Some(b) = chars.next() {
-        match b {
-            b'+' => result.push(' '),
-            b'%' => {
-                let hi = chars.next().unwrap_or(b'0');
-                let lo = chars.next().unwrap_or(b'0');
-                let hex = [hi, lo];
-                if let Ok(s) = std::str::from_utf8(&hex) {
-                    if let Ok(val) = u8::from_str_radix(s, 16) {
-                        result.push(val as char);
-                        continue;
-                    }
-                }
-                result.push('%');
-                result.push(hi as char);
-                result.push(lo as char);
+async fn get_data(State(state): State<Arc<AppState>>) -> Json<DataResponse> {
+    let map = state.aircraft_map.read().await;
+    let current = state.tracked_callsign.read().await.clone();
+
+    let mut entries: Vec<AircraftEntry> = map
+        .iter()
+        .map(|(hex, a)| {
+            let cs = a.callsign.as_deref().unwrap_or("");
+            let tracking = cs.eq_ignore_ascii_case(&current) && !cs.is_empty();
+            AircraftEntry {
+                hex: hex.clone(),
+                callsign: cs.to_string(),
+                lat: a.latitude,
+                lon: a.longitude,
+                alt_ft: a.altitude_ft,
+                gs_kt: a.ground_speed_kt,
+                track: a.track,
+                age: a.last_updated.elapsed().as_secs(),
+                tracking,
             }
-            _ => result.push(b as char),
-        }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| a.hex.cmp(&b.hex));
+
+    Json(DataResponse {
+        tracked: current,
+        aircraft: entries,
+    })
+}
+
+async fn post_track(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<TrackForm>,
+) -> Redirect {
+    let callsign = form.callsign.trim().to_string();
+    if !callsign.is_empty() {
+        *state.tracked_callsign.write().await = callsign.clone();
+        println!("Web: now tracking callsign '{}'", callsign);
     }
-    result
+    Redirect::to("/")
 }
 
 fn escape_html(s: &str) -> String {
@@ -144,44 +109,6 @@ fn escape_html(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-async fn build_json(aircraft_map: &AircraftMap, tracked_callsign: &TrackedCallsign) -> String {
-    let map = aircraft_map.read().await;
-    let current = tracked_callsign.read().await.clone();
-
-    let mut entries = Vec::new();
-    let mut sorted: Vec<_> = map.iter().collect();
-    sorted.sort_by_key(|(hex, _)| hex.to_string());
-
-    for (hex, a) in &sorted {
-        let cs = a.callsign.as_deref().unwrap_or("");
-        let lat = a.latitude.map_or("null".to_string(), |v| format!("{v:.5}"));
-        let lon = a
-            .longitude
-            .map_or("null".to_string(), |v| format!("{v:.5}"));
-        let alt = a
-            .altitude_ft
-            .map_or("null".to_string(), |v| format!("{v:.0}"));
-        let gs = a
-            .ground_speed_kt
-            .map_or("null".to_string(), |v| format!("{v:.0}"));
-        let trk = a.track.map_or("null".to_string(), |v| format!("{v:.0}"));
-        let age = a.last_updated.elapsed().as_secs();
-
-        let tracking = cs.eq_ignore_ascii_case(&current) && !cs.is_empty();
-
-        entries.push(format!(
-            r#"{{"hex":"{}","callsign":"{}","lat":{},"lon":{},"alt_ft":{},"gs_kt":{},"track":{},"age":{},"tracking":{}}}"#,
-            hex, cs, lat, lon, alt, gs, trk, age, tracking
-        ));
-    }
-
-    format!(
-        r#"{{"tracked":"{}","aircraft":[{}]}}"#,
-        current,
-        entries.join(",")
-    )
 }
 
 async fn build_page(aircraft_map: &AircraftMap, tracked_callsign: &TrackedCallsign) -> String {
