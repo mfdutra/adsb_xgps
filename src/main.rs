@@ -18,6 +18,10 @@ struct Args {
     /// Flight callsign to track
     callsign: String,
 
+    /// UDP broadcast address for XGPS output
+    #[arg(long, default_value = "255.255.255.255")]
+    broadcast: String,
+
     /// Print all tracked aircraft every second
     #[arg(long)]
     debug: bool,
@@ -141,7 +145,7 @@ async fn sbs_reader(server: String, aircraft_map: AircraftMap) {
     eprintln!("Connection to {} closed", addr);
 }
 
-async fn xgps_broadcaster(callsign: TrackedCallsign, aircraft_map: AircraftMap) {
+async fn xgps_broadcaster(callsign: TrackedCallsign, aircraft_map: AircraftMap, broadcast: String) {
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .expect("Failed to bind UDP socket");
@@ -185,7 +189,7 @@ async fn xgps_broadcaster(callsign: TrackedCallsign, aircraft_map: AircraftMap) 
 
         let msg = format!("XGPSadsb_xgps,{lon},{lat},{alt_m:.1},{track:.2},{gs_ms:.1}");
         if let Err(e) = socket
-            .send_to(msg.as_bytes(), "255.255.255.255:49002")
+            .send_to(msg.as_bytes(), format!("{}:49002", broadcast))
             .await
         {
             eprintln!("UDP send error: {}", e);
@@ -232,7 +236,7 @@ async fn main() {
 
     let reader_handle = tokio::spawn(sbs_reader(args.server, aircraft_map.clone()));
     let broadcaster_handle =
-        tokio::spawn(xgps_broadcaster(tracked_callsign.clone(), aircraft_map.clone()));
+        tokio::spawn(xgps_broadcaster(tracked_callsign.clone(), aircraft_map.clone(), args.broadcast));
     let web_handle = tokio::spawn(web::run(aircraft_map.clone(), tracked_callsign.clone()));
 
     #[allow(clippy::collapsible_if)]

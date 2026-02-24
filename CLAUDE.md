@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-adsb_xgps is a Rust bridge that connects to a dump1090 ADS-B receiver (SBS/BaseStation protocol on port 30003), tracks a specific aircraft by callsign, and broadcasts its position in XGPS format over UDP (255.255.255.255:49002). This allows ADS-B-tracked aircraft to appear in apps that support XGPS (e.g., ForeFlight). It also provides a web UI for monitoring all tracked aircraft and changing the tracked callsign at runtime.
+adsb_xgps is a Rust bridge that connects to a dump1090 ADS-B receiver (SBS/BaseStation protocol on port 30003), tracks a specific aircraft by callsign, and broadcasts its position in XGPS format over UDP (default 255.255.255.255:49002, configurable via `--broadcast`). This allows ADS-B-tracked aircraft to appear in apps that support XGPS (e.g., ForeFlight). It also provides a web UI for monitoring all tracked aircraft and changing the tracked callsign at runtime.
 
 ## Build & Test Commands
 
