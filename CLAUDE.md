@@ -11,17 +11,17 @@ adsb_xgps is a Rust bridge that connects to a dump1090 ADS-B receiver (SBS/BaseS
 ```bash
 cargo build                  # Debug build
 cargo build --release        # Release build
-cargo test --verbose         # Run all tests (23 unit tests)
+cargo test --verbose         # Run all tests (33 unit tests)
 cargo test <test_name>       # Run a single test by name
 cargo clippy                 # Lint (code uses clippy pragmas)
 ```
 
 ## Architecture
 
-Two-file application (~900 lines total) with four concurrent Tokio async tasks coordinated via `tokio::select!`:
+Two-file application (~1100 lines total) with four concurrent Tokio async tasks coordinated via `tokio::select!`:
 
-- **`src/main.rs`** (~600 lines) — CLI args, `Aircraft` struct, SBS parsing, XGPS broadcasting, debug printing, and all unit tests
-- **`src/web.rs`** (~200 lines) — Axum-based HTTP server serving an HTML dashboard and JSON API
+- **`src/main.rs`** (~600 lines) — CLI args, `Aircraft` struct, SBS parsing, XGPS broadcasting, debug printing, and 23 unit tests for SBS parsing
+- **`src/web.rs`** (~470 lines) — Axum-based HTTP server serving an HTML dashboard and JSON API, plus 10 unit tests for endpoints
 
 ### Async Tasks
 
@@ -43,4 +43,4 @@ Two-file application (~900 lines total) with four concurrent Tokio async tasks c
 
 ## Dependencies
 
-Four dependencies: `axum` v0.8 for the web server, `clap` v4 (derive) for CLI args, `serde` v1 (derive) for JSON serialization, and `tokio` v1 (full) for the async runtime.
+Four dependencies: `axum` v0.8 for the web server, `clap` v4 (derive) for CLI args, `serde` v1 (derive) for JSON serialization, and `tokio` v1 (full) for the async runtime. Dev-dependencies: `http-body-util`, `serde_json`, `tower` (for axum handler testing via `oneshot`).
