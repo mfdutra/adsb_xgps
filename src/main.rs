@@ -127,22 +127,31 @@ fn parse_sbs_line(line: &str, aircraft_map: &mut HashMap<String, Aircraft>) {
 
 async fn sbs_reader(server: String, aircraft_map: AircraftMap) {
     let addr = format!("{}:30003", server);
-    println!("Connecting to {}...", addr);
 
-    let stream = TcpStream::connect(&addr)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to connect to {}: {}", addr, e));
+    loop {
+        println!("Connecting to {}...", addr);
 
-    println!("Connected to {}", addr);
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
+        let stream = match TcpStream::connect(&addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to connect to {}: {}. Retrying in 1s...", addr, e);
+                time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        let mut map = aircraft_map.write().await;
-        parse_sbs_line(&line, &mut map);
+        println!("Connected to {}", addr);
+        let reader = BufReader::new(stream);
+        let mut lines = reader.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let mut map = aircraft_map.write().await;
+            parse_sbs_line(&line, &mut map);
+        }
+
+        eprintln!("Connection to {} closed. Reconnecting in 1s...", addr);
+        time::sleep(Duration::from_secs(1)).await;
     }
-
-    eprintln!("Connection to {} closed", addr);
 }
 
 async fn xgps_broadcaster(callsign: TrackedCallsign, aircraft_map: AircraftMap, broadcast: String) {
